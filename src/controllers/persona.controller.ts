@@ -1,30 +1,31 @@
+import {service} from '@loopback/core';
 import {
   Count,
   CountSchema,
   Filter,
   FilterExcludingWhere,
   repository,
-  Where,
+  Where
 } from '@loopback/repository';
 import {
-  post,
-  param,
-  get,
-  getModelSchemaRef,
-  patch,
-  put,
-  del,
-  requestBody,
-  response,
+  del, get,
+  getModelSchemaRef, HttpErrors, param, patch, post, put, requestBody,
+  response
 } from '@loopback/rest';
-import {Persona} from '../models';
+import {Llaves} from '../config/llaves';
+import {Credenciales, Persona} from '../models';
 import {PersonaRepository} from '../repositories';
+import {AutenticacionService} from '../services';
+const fetch = require('node-fetch')
 
 export class PersonaController {
   constructor(
     @repository(PersonaRepository)
-    public personaRepository : PersonaRepository,
-  ) {}
+    public personaRepository: PersonaRepository,
+
+    @service(AutenticacionService)
+    public autenticationService: AutenticacionService,
+  ) { }
 
   @post('/personas')
   @response(200, {
@@ -44,8 +45,48 @@ export class PersonaController {
     })
     persona: Omit<Persona, 'id'>,
   ): Promise<Persona> {
-    return this.personaRepository.create(persona);
+    let clave = this.autenticationService.GenerarClave();
+    let claveCifrada = this.autenticationService.CifrarClave(clave);
+    persona.clave = claveCifrada;
+    let p = await this.personaRepository.create(persona);//guardar en base de datos
+
+    //notificar por correo
+    let destino = persona.correo;
+    let asunto = 'Regitrado en Backend Loopback'
+    let contenido = `Hola ${persona.nombre} \n tu usuario es: ${persona.correo}, \n tu clave es: ${clave}`
+    fetch(`${Llaves.urlServicioNotificaciones}/envio-correo?correo_destino=${destino}&asunto=${asunto}&contenido=${contenido}`)
+      .then((data: any) => {
+        console.log(data);
+      })
+
+    return p;
   }
+
+  @post("/identificarpersona", {
+    responses: {
+      '200': {
+        description: 'Identificación de usuarios'
+      }
+    }
+  })
+  async identificarPersona(
+    @requestBody() credenciales: Credenciales
+  ) {
+    let p = await this.autenticationService.IdentificarPersona(credenciales.usuario, credenciales.password);
+    if (p) {
+      let token = this.autenticationService.GenerarTokenJWT(p)
+      return {
+        datos: {
+          nombre: p.nombre,
+          correo: p.correo,
+          id: p.id,
+        },
+        token: token
+      };
+    } else {
+      throw new HttpErrors[401]('El usuario no existe');
+    }
+  };
 
   @get('/personas/count')
   @response(200, {
